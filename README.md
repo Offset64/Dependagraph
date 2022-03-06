@@ -1,5 +1,11 @@
 # Dependagraph
 
+**CURRENTLY ONLY SUPPORTS GOLANG TARGETS**
+
+
+**WILL BREAK AND POLLUTE THE DATABASE IF TARGETING OTHER LANGUAGES**
+
+
 ## Help
 ```bash
 python3 main.py -h
