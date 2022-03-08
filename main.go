@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"os"
@@ -46,7 +48,70 @@ func main() {
 		log.Fatalln("GITHUB_API_SECRET not set")
 	}
 
-	if len(strings.Split(repository, "/")) != 2 {
-		log.Fatalln("incorrect format of repository flag")
+	ref, err := ParseGithubRepositoryReference(repository)
+	if err != nil {
+		log.Fatalf("invalid github repository reference: %s", err)
 	}
+
+	db := Neo4jService{}
+	scraper := GithubDependencyScraper{}
+	go fetchGithubRepository(context.TODO(), ref, scraper, db)
+
+	defer db.Close()
+	if !coalesce {
+		return
+	}
+
+	log.Printf("RUNNING IN COALESCE MODE. MAY RUN FOREVER.")
+	for {
+		ref, ok := db.GetUntargetedNode()
+		if !ok {
+			break
+		}
+
+		go fetchGithubRepository(context.TODO(), ref, scraper, db)
+	}
+}
+
+type Neo4jService struct{}
+
+func (n *Neo4jService) GetUntargetedNode() (GithubRepositoryReference, bool) {
+	return GithubRepositoryReference{}, false
+}
+
+func (n *Neo4jService) Close() error {
+	return nil
+}
+
+func fetchGithubRepository(ctx context.Context, ref GithubRepositoryReference, scraper GithubDependencyScraper, db Neo4jService) {
+	// TODO: Get dependents and dependencies and store them in the DB
+	go scraper.GetDependents(context.TODO(), ref)
+	go scraper.GetDependencies(context.TODO(), ref)
+}
+
+type GithubRepositoryReference struct {
+	org  string
+	repo string
+}
+
+func ParseGithubRepositoryReference(str string) (GithubRepositoryReference, error) {
+	parts := strings.Split(str, "/")
+	if len(parts) != 2 {
+		return GithubRepositoryReference{}, errors.New("must have exactly one slash")
+	}
+
+	return GithubRepositoryReference{
+		org:  parts[0],
+		repo: parts[1],
+	}, nil
+}
+
+type GithubDependencyScraper struct{}
+
+func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref GithubRepositoryReference) error {
+	return nil
+}
+
+func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref GithubRepositoryReference) error {
+	return nil
 }
