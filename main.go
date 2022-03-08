@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"strings"
+	"sync"
+
+	"github.com/machinebox/graphql"
 )
 
 type Options struct {
@@ -75,18 +79,43 @@ func main() {
 
 type Neo4jService struct{}
 
-func (n *Neo4jService) GetUntargetedNode() (GithubRepositoryReference, bool) {
-	return GithubRepositoryReference{}, false
-}
+func (n *Neo4jService) SaveWindow(ctx context.Context, ref GithubRepositoryReference, dependencies []Repository, dependents []Repository) error
 
-func (n *Neo4jService) Close() error {
-	return nil
-}
+func (n *Neo4jService) GetUntargetedNode() (GithubRepositoryReference, bool)
 
-func fetchGithubRepository(ctx context.Context, ref GithubRepositoryReference, scraper GithubDependencyScraper, db Neo4jService) {
-	// TODO: Get dependents and dependencies and store them in the DB
-	go scraper.GetDependents(context.TODO(), ref)
-	go scraper.GetDependencies(context.TODO(), ref)
+func (n *Neo4jService) Close()
+
+func fetchGithubRepository(ctx context.Context, ref GithubRepositoryReference, scraper GithubDependencyScraper, db Neo4jService) error {
+	var wg sync.WaitGroup
+	var dependencies, dependents []Repository
+	var errs struct {
+		dependencies error
+		dependents   error
+	}
+
+	wg.Add(2)
+	// This mess is so we can process both at the same time.
+	// This is simpler than using channels.
+	go func() {
+		dependents, errs.dependents = scraper.GetDependents(context.TODO(), ref)
+		wg.Done()
+	}()
+
+	go func() {
+		dependencies, errs.dependencies = scraper.GetDependencies(context.TODO(), ref)
+		wg.Done()
+	}()
+
+	wg.Wait()
+	if errs.dependencies != nil {
+		return fmt.Errorf("failed to fetch dependencies: %w", errs.dependencies)
+	}
+
+	if errs.dependents != nil {
+		return fmt.Errorf("failed to fetch dependents: %w", errs.dependents)
+	}
+
+	return db.SaveWindow(ctx, ref, dependencies, dependents)
 }
 
 type GithubRepositoryReference struct {
@@ -106,12 +135,41 @@ func ParseGithubRepositoryReference(str string) (GithubRepositoryReference, erro
 	}, nil
 }
 
-type GithubDependencyScraper struct{}
-
-func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref GithubRepositoryReference) error {
-	return nil
+type GithubDependencyScraper struct {
+	client          *graphql.Client
+	githubAPISecret string
 }
 
-func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref GithubRepositoryReference) error {
-	return nil
+type Repository struct {
+	FQN, Organization, Repository, URL, Version, Language string
 }
+
+// GetDependencies queries Githubs GraphQL endpoint to return a set of all dependencies that this repository depends upon.
+func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref GithubRepositoryReference) ([]Repository, error) {
+	req := graphql.NewRequest(`
+	query GetDependencies($org: String!, $name: String!) {
+			repository(owner: $org, name: $name) {
+					dependencyGraphManifests {
+							edges {
+									node {
+									blobPath
+									dependencies {
+													nodes {
+															packageName
+															requirements
+													}
+											}
+									}
+							}
+					}
+			}
+	}`)
+	req.Var("org", ref.org)
+	req.Var("name", ref.repo)
+	req.Header.Set("Accept", "application/vnd.github.hawkgirl-preview+json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", g.githubAPISecret))
+
+	return nil, nil
+}
+
+func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref GithubRepositoryReference) ([]Repository, error)
