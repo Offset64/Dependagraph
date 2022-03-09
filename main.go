@@ -55,21 +55,41 @@ func main() {
 
 	db := Neo4jService{}
 	scraper := GithubDependencyScraper{}
-	go fetchGithubRepository(context.TODO(), ref, scraper, db)
-
 	defer db.Close()
-	if !coalesce {
-		return
+
+	type taskResult struct {
+		Ref   GithubRepositoryReference
+		Error error
 	}
 
-	log.Printf("RUNNING IN COALESCE MODE. MAY RUN FOREVER.")
-	for {
-		ref, ok := db.GetUntargetedNode()
-		if !ok {
-			break
-		}
+	tasks := make(chan taskResult, 1)
+	tasks <- taskResult{
+		Ref:   ref,
+		Error: fetchGithubRepository(context.TODO(), ref, scraper, db),
+	}
 
-		go fetchGithubRepository(context.TODO(), ref, scraper, db)
+	if coalesce {
+		log.Printf("RUNNING IN COALESCE MODE. MAY RUN FOREVER.")
+		go func() {
+			for {
+				ref, ok := db.GetUntargetedNode()
+				if !ok {
+					break
+				}
+
+				tasks <- taskResult{Ref: ref, Error: fetchGithubRepository(context.TODO(), ref, scraper, db)}
+			}
+
+			close(tasks)
+		}()
+	}
+
+	for task := range tasks {
+		if task.Error != nil {
+			log.Printf("[%s] failed: %s", task.Ref, task.Error)
+		} else {
+			log.Printf("[%s] updated", task.Ref)
+		}
 	}
 }
 
