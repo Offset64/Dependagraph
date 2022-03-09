@@ -72,6 +72,8 @@ func main() {
 	if coalesce {
 		log.Printf("RUNNING IN COALESCE MODE. MAY RUN FOREVER.")
 		go func() {
+			// This is not optimally written because GetUntargetedNode will only ever return one result, and repeated calls may return the same result.
+			// A 'real' example would modify the below loop to pull many untargeted nodes in parallel, as it is unlikely we will come close to our rate limit like this.
 			for {
 				ref, ok := db.GetUntargetedNode(ctx)
 				if !ok {
