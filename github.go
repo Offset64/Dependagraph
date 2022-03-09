@@ -85,6 +85,13 @@ type GithubDependencyScraper struct {
 	githubAPISecret string
 }
 
+func NewGithubDependencyScraper(secret string) GithubDependencyScraper {
+	return GithubDependencyScraper{
+		client:          graphql.NewClient("https://api.github.com/graphql"),
+		githubAPISecret: secret,
+	}
+}
+
 func (g GithubDependencyScraper) prepareRequest(req *graphql.Request) {
 	req.Header.Set("Accept", "application/vnd.github.hawkgirl-preview+json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", g.githubAPISecret))
