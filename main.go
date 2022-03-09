@@ -2,15 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"sync"
 
-	"github.com/machinebox/graphql"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
@@ -179,63 +176,3 @@ func fetchGithubRepository(ctx context.Context, ref GithubRepositoryReference, s
 
 	return db.SaveWindow(ctx, ref, dependencies, dependents)
 }
-
-type GithubRepositoryReference struct {
-	org  string
-	repo string
-}
-
-func (r GithubRepositoryReference) String() string {
-	return strings.Join([]string{r.org, r.repo}, "/")
-}
-
-func ParseGithubRepositoryReference(str string) (GithubRepositoryReference, error) {
-	parts := strings.Split(str, "/")
-	if len(parts) != 2 {
-		return GithubRepositoryReference{}, errors.New("must have exactly one slash")
-	}
-
-	return GithubRepositoryReference{
-		org:  parts[0],
-		repo: parts[1],
-	}, nil
-}
-
-type GithubDependencyScraper struct {
-	client          *graphql.Client
-	githubAPISecret string
-}
-
-type Repository struct {
-	FQN, Organization, Repository, URL, Version, Language string
-}
-
-// GetDependencies queries Githubs GraphQL endpoint to return a set of all dependencies that this repository depends upon.
-func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref GithubRepositoryReference) ([]Repository, error) {
-	req := graphql.NewRequest(`
-	query GetDependencies($org: String!, $name: String!) {
-			repository(owner: $org, name: $name) {
-					dependencyGraphManifests {
-							edges {
-									node {
-									blobPath
-									dependencies {
-													nodes {
-															packageName
-															requirements
-													}
-											}
-									}
-							}
-					}
-			}
-	}`)
-	req.Var("org", ref.org)
-	req.Var("name", ref.repo)
-	req.Header.Set("Accept", "application/vnd.github.hawkgirl-preview+json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", g.githubAPISecret))
-
-	return nil, nil
-}
-
-func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref GithubRepositoryReference) ([]Repository, error)
