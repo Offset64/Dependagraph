@@ -85,6 +85,11 @@ type GithubDependencyScraper struct {
 	githubAPISecret string
 }
 
+func (g GithubDependencyScraper) prepareRequest(req *graphql.Request) {
+	req.Header.Set("Accept", "application/vnd.github.hawkgirl-preview+json")
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", g.githubAPISecret))
+}
+
 // GetDependencies queries Githubs GraphQL endpoint to return a set of all dependencies that this repository depends upon.
 func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref GithubRepositoryReference) ([]Repository, error) {
 	if err := limitFetchDependencies.Wait(ctx); err != nil {
@@ -111,10 +116,56 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Githu
 	}`)
 	req.Var("org", ref.org)
 	req.Var("name", ref.repo)
-	req.Header.Set("Accept", "application/vnd.github.hawkgirl-preview+json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", g.githubAPISecret))
+	g.prepareRequest(req)
 
-	return nil, nil
+	var resp struct {
+		Repository struct {
+			DependencyGraphManifests struct {
+				Edges []struct {
+					Node struct {
+						BlobPath     string
+						Dependencies struct {
+							Nodes []struct {
+								PackageName, Requirements string
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if err := g.client.Run(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+
+	var deps []Repository
+	for _, edge := range resp.Repository.DependencyGraphManifests.Edges {
+		if strings.HasPrefix(edge.Node.BlobPath, ".github/workflows") {
+			continue
+		}
+
+		for _, dep := range edge.Node.Dependencies.Nodes {
+			rep := Repository{
+				FQN:      dep.PackageName,
+				URL:      dep.PackageName,
+				Version:  dep.Requirements,
+				Language: "",
+			}
+
+			if strings.Contains(dep.PackageName, "github") {
+				// dep.Package name will look like github.com/offset64/EOS
+				parts := strings.Split(dep.PackageName, "/")
+				rep.FQN = fmt.Sprintf("%s/%s", parts[1], parts[2])
+				rep.Organization = parts[1]
+				rep.Repository = parts[2]
+			}
+
+			deps = append(deps, rep)
+		}
+	}
+
+	return deps, nil
 }
 
 func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref GithubRepositoryReference) ([]Repository, error) {
