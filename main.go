@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"sync"
+
+	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
 type Options struct {
@@ -54,8 +56,13 @@ func main() {
 		log.Fatalf("invalid github repository reference: %s", err)
 	}
 
-	scraper := NewGithubDependencyScraper("")
-	db := NewNeo4jService(nil)
+	scraper := NewGithubDependencyScraper(opts.GithubAPISecret)
+	drv, err := neo4j.NewDriver(opts.URI, neo4j.BasicAuth(opts.User, opts.Password, ""))
+	if err != nil {
+		log.Fatalf("could not establish connection to neo4j: %s", err)
+	}
+
+	db := NewNeo4jService(drv)
 	defer db.Close()
 
 	type taskResult struct {
