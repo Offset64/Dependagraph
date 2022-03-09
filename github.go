@@ -5,52 +5,65 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/machinebox/graphql"
 )
 
 var (
-	limitDependentPage     = rateLimiter{TokensPerPeriod: 120, Duration: 60 * time.Second}
-	limitFetchDependencies = rateLimiter{TokensPerPeriod: 60, Duration: 60 * time.Second}
+	limitDependentPage     = newRateLimiter(120, 60*time.Second)
+	limitFetchDependencies = newRateLimiter(60, 60*time.Second)
 )
 
-func init() {
-	limitDependentPage.Start()
-	limitFetchDependencies.Start()
-}
-
 type rateLimiter struct {
-	TokensPerPeriod int
-	Duration        time.Duration
-	wg              sync.WaitGroup
-	t               *time.Ticker
+	t *time.Ticker
+	// requestTokens is a channel which contains a number of elements, each representing a transaction that the user can make.
+	// The caller can read from this channel to wait for a request to become available.
+	// The actual value of this channel  should be thrown away.
+	requestTokens chan struct{}
 }
 
-func (rl *rateLimiter) Start() {
-	if rl.t != nil {
-		return
+func newRateLimiter(tokensPerPeriod int, period time.Duration) rateLimiter {
+	rl := rateLimiter{
+		t:             time.NewTicker(period),
+		requestTokens: make(chan struct{}, tokensPerPeriod),
 	}
 
-	rl.t = time.NewTicker(rl.Duration)
 	go func() {
-		<-rl.t.C
-		rl.wg.Add(rl.TokensPerPeriod)
+		for {
+			_, ok := <-rl.t.C
+			// Ticker was closed.
+			if !ok {
+				break
+			}
+
+		tokenSend:
+			for i := 0; i < tokensPerPeriod; i++ {
+				// If the channel is full, then we do not want to get 'stuck' in this loop waiting on a send because we will miss future ticks.
+				// The rate limit will not "carry over" to new periods, so we use this select statement to discard any superfluous request tokens.
+				select {
+				case rl.requestTokens <- struct{}{}:
+				default:
+					break tokenSend
+				}
+			}
+		}
+
 	}()
+
+	return rl
+}
+
+func (rl *rateLimiter) Close() {
+	rl.t.Stop()
+	close(rl.requestTokens)
 }
 
 func (rl *rateLimiter) Wait(ctx context.Context) error {
-	done := make(chan struct{}, 1)
-	go func() {
-		rl.wg.Wait()
-		done <- struct{}{}
-	}()
-
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-done:
+	case <-rl.requestTokens:
 		return nil
 	}
 }
