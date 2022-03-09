@@ -11,6 +11,16 @@ import (
 	"github.com/machinebox/graphql"
 )
 
+var (
+	limitDependentPage     = rateLimiter{TokensPerPeriod: 120, Duration: 60 * time.Second}
+	limitFetchDependencies = rateLimiter{TokensPerPeriod: 60, Duration: 60 * time.Second}
+)
+
+func init() {
+	limitDependentPage.Start()
+	limitFetchDependencies.Start()
+}
+
 type rateLimiter struct {
 	TokensPerPeriod int
 	Duration        time.Duration
@@ -43,16 +53,6 @@ func (rl *rateLimiter) Wait(ctx context.Context) error {
 	case <-done:
 		return nil
 	}
-}
-
-var (
-	limitDependentPage     = rateLimiter{TokensPerPeriod: 120, Duration: 60 * time.Second}
-	limitFetchDependencies = rateLimiter{TokensPerPeriod: 60, Duration: 60 * time.Second}
-)
-
-func init() {
-	limitDependentPage.Start()
-	limitFetchDependencies.Start()
 }
 
 type GithubRepositoryReference struct {
