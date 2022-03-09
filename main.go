@@ -53,8 +53,8 @@ func main() {
 		log.Fatalf("invalid github repository reference: %s", err)
 	}
 
-	db := Neo4jService{}
-	scraper := GithubDependencyScraper{}
+	scraper := NewGithubDependencyScraper("")
+	db := NewNeo4jService(nil)
 	defer db.Close()
 
 	type taskResult struct {
@@ -72,7 +72,7 @@ func main() {
 		log.Printf("RUNNING IN COALESCE MODE. MAY RUN FOREVER.")
 		go func() {
 			for {
-				ref, ok := db.GetUntargetedNode()
+				ref, ok := db.GetUntargetedNode(context.TODO())
 				if !ok {
 					break
 				}

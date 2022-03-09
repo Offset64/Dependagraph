@@ -7,11 +7,18 @@ import (
 )
 
 type Neo4jService struct {
-	session neo4j.Session
+	drv neo4j.Driver
 }
 
-func (n *Neo4jService) SaveWindow(ctx context.Context, ref GithubRepositoryReference, dependencies []Repository, dependents []Repository) error {
-	_, err := n.session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+func NewNeo4jService(driver neo4j.Driver) Neo4jService {
+	return Neo4jService{drv: driver}
+}
+
+func (n *Neo4jService) SaveWindow(_ context.Context, ref GithubRepositoryReference, dependencies []Repository, dependents []Repository) error {
+	// Context is currently a no-op as neo4j does not support it.
+	session := n.drv.NewSession(neo4j.SessionConfig{})
+	defer session.Close()
+	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
 		// Update the reference itself
 		nodeID, err := tx.Run("MERGE (c:Repository {full_name: $full_name}) SET c.last_targeted = timestamp() RETURN c", map[string]interface{}{
 			"full_name": ref.String(),
@@ -45,8 +52,11 @@ func (n *Neo4jService) SaveWindow(ctx context.Context, ref GithubRepositoryRefer
 	return err
 }
 
-func (n *Neo4jService) GetUntargetedNode() (GithubRepositoryReference, bool) {
-	result, err := n.session.ReadTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+func (n *Neo4jService) GetUntargetedNode(_ context.Context) (GithubRepositoryReference, bool) {
+	// Context support is currently a noop because Neo4j does not support it.
+	session := n.drv.NewSession(neo4j.SessionConfig{})
+	defer session.Close()
+	result, err := session.ReadTransaction(func(tx neo4j.Transaction) (interface{}, error) {
 		result, err := tx.Run("MATCH (n:Repository) WHERE n.last_targeted IS NULL AND NOT n.full_name CONTAINS '.' RETURN n.org, n.name LIMIT 1", nil)
 		if err != nil {
 			return nil, err
@@ -72,5 +82,5 @@ func (n *Neo4jService) GetUntargetedNode() (GithubRepositoryReference, bool) {
 }
 
 func (n *Neo4jService) Close() {
-	n.session.Close()
+	n.drv.Close()
 }
