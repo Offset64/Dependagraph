@@ -48,6 +48,7 @@ func main() {
 		log.Fatalln("GITHUB_API_SECRET not set")
 	}
 
+	ctx := context.Background()
 	ref, err := ParseGithubRepositoryReference(repository)
 	if err != nil {
 		log.Fatalf("invalid github repository reference: %s", err)
@@ -65,19 +66,19 @@ func main() {
 	tasks := make(chan taskResult, 1)
 	tasks <- taskResult{
 		Ref:   ref,
-		Error: fetchGithubRepository(context.TODO(), ref, scraper, db),
+		Error: fetchGithubRepository(ctx, ref, scraper, db),
 	}
 
 	if coalesce {
 		log.Printf("RUNNING IN COALESCE MODE. MAY RUN FOREVER.")
 		go func() {
 			for {
-				ref, ok := db.GetUntargetedNode(context.TODO())
+				ref, ok := db.GetUntargetedNode(ctx)
 				if !ok {
 					break
 				}
 
-				tasks <- taskResult{Ref: ref, Error: fetchGithubRepository(context.TODO(), ref, scraper, db)}
+				tasks <- taskResult{Ref: ref, Error: fetchGithubRepository(ctx, ref, scraper, db)}
 			}
 
 			close(tasks)
@@ -105,12 +106,12 @@ func fetchGithubRepository(ctx context.Context, ref GithubRepositoryReference, s
 	// This mess is so we can process both at the same time.
 	// This is simpler than using channels.
 	go func() {
-		dependents, errs.dependents = scraper.GetDependents(context.TODO(), ref)
+		dependents, errs.dependents = scraper.GetDependents(ctx, ref)
 		wg.Done()
 	}()
 
 	go func() {
-		dependencies, errs.dependencies = scraper.GetDependencies(context.TODO(), ref)
+		dependencies, errs.dependencies = scraper.GetDependencies(ctx, ref)
 		wg.Done()
 	}()
 
