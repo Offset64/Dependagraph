@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
+	"github.com/gocolly/colly"
 	"github.com/machinebox/graphql"
 )
 
@@ -68,11 +70,6 @@ func (rl *rateLimiter) Wait(ctx context.Context) error {
 	}
 }
 
-type GithubRepositoryReference struct {
-	org  string
-	repo string
-}
-
 func (r GithubRepositoryReference) String() string {
 	return strings.Join([]string{r.org, r.repo}, "/")
 }
@@ -87,10 +84,6 @@ func ParseGithubRepositoryReference(str string) (GithubRepositoryReference, erro
 		org:  parts[0],
 		repo: parts[1],
 	}, nil
-}
-
-type Repository struct {
-	FQN, Organization, Repository, URL, Version, Language string
 }
 
 type GithubDependencyScraper struct {
@@ -116,6 +109,8 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Githu
 		return nil, err
 	}
 
+	// TODO: This schema needs to be updated to fetch the dependency repository URL.
+	// Right now we can only easily crawl golang projects because we rely on the github.com/org/repo convention
 	req := graphql.NewRequest(`
 	query GetDependencies($org: String!, $name: String!) {
 			repository(owner: $org, name: $name) {
@@ -194,4 +189,22 @@ func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref GithubR
 	}
 
 	panic("unimplemented!")
+
+	// Initial url to hit
+	var initial_page string = fmt.Sprintf("https://github.com/%s/network/dependents", ref.String())
+
+	g.scrapeDependentPage(ctx, initial_page)
+}
+
+func (g *GithubDependencyScraper) scrapeDependentPage(ctx context.Context, url string) ([]Repository, string, error) {
+	panic("unimplemented")
+
+	c := colly.NewCollector(
+		colly.AllowedDomains("github.com"),
+	)
+	c.OnRequest(func(r *colly.Request) {
+		log.Printf("Hitting %s", url)
+	})
+
+	return nil, "", nil
 }
