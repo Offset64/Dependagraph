@@ -2,7 +2,6 @@ package dependagraph
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -70,22 +69,6 @@ func (rl *rateLimiter) Wait(ctx context.Context) error {
 	}
 }
 
-func (r GithubRepositoryReference) String() string {
-	return strings.Join([]string{r.org, r.repo}, "/")
-}
-
-func ParseGithubRepositoryReference(str string) (GithubRepositoryReference, error) {
-	parts := strings.Split(str, "/")
-	if len(parts) != 2 {
-		return GithubRepositoryReference{}, errors.New("must have exactly one slash")
-	}
-
-	return GithubRepositoryReference{
-		org:  parts[0],
-		repo: parts[1],
-	}, nil
-}
-
 type GithubDependencyScraper struct {
 	client          *graphql.Client
 	githubAPISecret string
@@ -104,33 +87,49 @@ func (g GithubDependencyScraper) prepareRequest(req *graphql.Request) {
 }
 
 // GetDependencies queries Githubs GraphQL endpoint to return a set of all dependencies that this repository depends upon.
-func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref GithubRepositoryReference) ([]Repository, error) {
+func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Repository) ([]Repository, error) {
 	if err := limitFetchDependencies.Wait(ctx); err != nil {
 		return nil, err
+	}
+	if !ref.InGithub {
+		return nil, fmt.Errorf("%s may not be in github. Aborting graphql lookup", ref)
 	}
 
 	// TODO: This schema needs to be updated to fetch the dependency repository URL.
 	// Right now we can only easily crawl golang projects because we rely on the github.com/org/repo convention
 	req := graphql.NewRequest(`
 	query GetDependencies($org: String!, $name: String!) {
-			repository(owner: $org, name: $name) {
-					dependencyGraphManifests {
-							edges {
-									node {
-									blobPath
-									dependencies {
-													nodes {
-															packageName
-															requirements
-													}
-											}
-									}
-							}
+		repository(owner: $org, name: $name) {
+		  dependencyGraphManifests {
+			edges {
+			  node {
+				blobPath # Path of the dependency file which was parsed to generate these results
+				dependencies {
+				  nodes { # The dependencies
+					packageName # How it's named in the package manager
+					requirements # The version
+					repository{ # The repo that represents the dependency
+					  name 
+					  url
+					  primaryLanguage{
+						name
+					  }
 					}
+				  }
+				}
+			  }
 			}
-	}`)
-	req.Var("org", ref.org)
-	req.Var("name", ref.repo)
+		  }
+		}
+	  }
+	  `)
+
+	var org, repo, err = ref.GithubComponents()
+	if err != nil {
+		return nil, err
+	}
+	req.Var("org", org)
+	req.Var("name", repo)
 	g.prepareRequest(req)
 
 	var resp struct {
@@ -142,6 +141,13 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Githu
 						Dependencies struct {
 							Nodes []struct {
 								PackageName, Requirements string
+								Repository                struct {
+									name     string
+									url      string
+									language struct {
+										name string
+									}
+								}
 							}
 						}
 					}
@@ -161,20 +167,17 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Githu
 		}
 
 		for _, dep := range edge.Node.Dependencies.Nodes {
-			rep := Repository{
-				FQN:      dep.PackageName,
-				URL:      dep.PackageName,
-				Version:  dep.Requirements,
-				Language: "",
+			var rep Repository
+			// If we have the URL, let's use that.
+			if dep.Repository.url != "" {
+				rep = NewRepository(dep.Repository.url)
+			} else {
+				rep = NewRepository(dep.PackageName)
 			}
 
-			if strings.Contains(dep.PackageName, "github") {
-				// dep.Package name will look like github.com/offset64/EOS
-				parts := strings.Split(dep.PackageName, "/")
-				rep.FQN = fmt.Sprintf("%s/%s", parts[1], parts[2])
-				rep.Organization = parts[1]
-				rep.Repository = parts[2]
-			}
+			rep.Language = dep.Repository.language.name
+			// TODO: Solve the version normalization problem before adding versions to the database
+			// rep.Version = dep.Requirements
 
 			deps = append(deps, rep)
 		}
@@ -183,7 +186,7 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Githu
 	return deps, nil
 }
 
-func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref GithubRepositoryReference) ([]Repository, error) {
+func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref Repository) ([]Repository, error) {
 	if err := limitDependentPage.Wait(ctx); err != nil {
 		return nil, err
 	}
@@ -191,9 +194,11 @@ func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref GithubR
 	panic("unimplemented!")
 
 	// Initial url to hit
-	var initial_page string = fmt.Sprintf("https://github.com/%s/network/dependents", ref.String())
+	var initial_page string = ref.URL
 
 	g.scrapeDependentPage(ctx, initial_page)
+
+	return nil, nil
 }
 
 func (g *GithubDependencyScraper) scrapeDependentPage(ctx context.Context, url string) ([]Repository, string, error) {

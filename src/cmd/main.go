@@ -23,7 +23,7 @@ var (
 )
 
 func init() {
-	flag.StringVar(&repository, "repository", "", "The repo to seed the graph with.\nMust be in the form of org/repo (e.g, offset46/Dependagraph)")
+	flag.StringVar(&repository, "repository", "", "The repo to seed the graph with.\nMust be in the form of org/repo (e.g, offset64/Dependagraph) or a github url e.g https://github.com/offset64/dependagraph")
 	flag.BoolVar(&coalesce, "coalesce", false, "This enables unlimited crawling mode.\nAfter seeding, grab a leaf node and run again with the leaf as the new seed.")
 	flag.Parse()
 }
@@ -53,9 +53,9 @@ func main() {
 	}
 
 	ctx := context.Background()
-	ref, err := dependagraph.ParseGithubRepositoryReference(repository)
-	if err != nil {
-		log.Fatalf("invalid github repository reference: %s", err)
+	ref := dependagraph.NewRepository(repository)
+	if !ref.InGithub {
+		log.Fatalf("invalid github repository reference: %s", ref)
 	}
 
 	scraper := dependagraph.NewGithubDependencyScraper(opts.GithubAPISecret)
@@ -68,7 +68,7 @@ func main() {
 	defer db.Close()
 
 	type taskResult struct {
-		Ref   dependagraph.GithubRepositoryReference
+		Ref   dependagraph.Repository
 		Error error
 	}
 
@@ -105,7 +105,7 @@ func main() {
 	}
 }
 
-func fetchGithubRepository(ctx context.Context, ref dependagraph.GithubRepositoryReference, scraper dependagraph.GithubDependencyScraper, db dependagraph.Neo4jService) error {
+func fetchGithubRepository(ctx context.Context, ref dependagraph.Repository, scraper dependagraph.GithubDependencyScraper, db dependagraph.Neo4jService) error {
 	var wg sync.WaitGroup
 	var dependencies, dependents []dependagraph.Repository
 	var errs struct {

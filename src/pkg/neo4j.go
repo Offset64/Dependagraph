@@ -14,7 +14,7 @@ func NewNeo4jService(driver neo4j.Driver) Neo4jService {
 	return Neo4jService{drv: driver}
 }
 
-func (n *Neo4jService) SaveWindow(_ context.Context, ref GithubRepositoryReference, dependencies []Repository, dependents []Repository) error {
+func (n *Neo4jService) SaveWindow(_ context.Context, ref Repository, dependencies []Repository, dependents []Repository) error {
 	// Context is currently a no-op as neo4j does not support it.
 	session := n.drv.NewSession(neo4j.SessionConfig{})
 	defer session.Close()
@@ -30,7 +30,7 @@ func (n *Neo4jService) SaveWindow(_ context.Context, ref GithubRepositoryReferen
 
 		for _, dep := range dependencies {
 			v := map[string]interface{}{
-				"full_name": dep.FQN,
+				"full_name": dep.String(),
 				"cid":       nodeID,
 			}
 
@@ -39,7 +39,7 @@ func (n *Neo4jService) SaveWindow(_ context.Context, ref GithubRepositoryReferen
 
 		for _, dep := range dependents {
 			v := map[string]interface{}{
-				"full_name": dep.FQN,
+				"full_name": dep.String(),
 				"cid":       nodeID,
 			}
 
@@ -52,7 +52,7 @@ func (n *Neo4jService) SaveWindow(_ context.Context, ref GithubRepositoryReferen
 	return err
 }
 
-func (n *Neo4jService) GetUntargetedNode(_ context.Context) (GithubRepositoryReference, bool) {
+func (n *Neo4jService) GetUntargetedNode(_ context.Context) (Repository, bool) {
 	// Context support is currently a noop because Neo4j does not support it.
 	session := n.drv.NewSession(neo4j.SessionConfig{})
 	defer session.Close()
@@ -67,18 +67,16 @@ func (n *Neo4jService) GetUntargetedNode(_ context.Context) (GithubRepositoryRef
 			return nil, err
 		}
 
-		org, _ := rec.Get("org")
-		name, _ := rec.Get("name")
+		name, _ := rec.Get("full_name")
 
-		return GithubRepositoryReference{org: org.(string), repo: name.(string)}, nil
+		return NewRepository(name.(string)), nil
 	})
 
 	if err != nil {
-		return GithubRepositoryReference{}, false
+		return Repository{}, false
 	}
 
-	repo := result.(*Repository)
-	return GithubRepositoryReference{org: repo.Organization, repo: repo.Repository}, true
+	return result.(Repository), true
 }
 
 func (n *Neo4jService) Close() {
