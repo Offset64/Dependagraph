@@ -12,8 +12,8 @@ import (
 )
 
 var (
-	limitDependentPage     = newRateLimiter(120, 60*time.Second)
-	limitFetchDependencies = newRateLimiter(60, 60*time.Second)
+	limitFetchDependencies = newRateLimiter(1, 1*time.Second)
+	limitFetchDependents   = 1 * time.Second // Colly uses this when constructing the collector
 )
 
 type rateLimiter struct {
@@ -88,6 +88,7 @@ func (g GithubDependencyScraper) prepareRequest(req *graphql.Request) {
 
 // GetDependencies queries Githubs GraphQL endpoint to return a set of all dependencies that this repository depends upon.
 func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Repository) ([]Repository, error) {
+	log.Printf("Getting dependencies for %+v", ref)
 	if err := limitFetchDependencies.Wait(ctx); err != nil {
 		return nil, err
 	}
@@ -142,10 +143,10 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Repos
 							Nodes []struct {
 								PackageName, Requirements string
 								Repository                struct {
-									name     string
-									url      string
-									language struct {
-										name string
+									Name     string
+									URL      string
+									Language struct {
+										Name string
 									}
 								}
 							}
@@ -162,20 +163,20 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Repos
 
 	var deps []Repository
 	for _, edge := range resp.Repository.DependencyGraphManifests.Edges {
-		if strings.HasPrefix(edge.Node.BlobPath, ".github/workflows") {
+		if strings.Contains(edge.Node.BlobPath, ".github/workflows") {
 			continue
 		}
 
 		for _, dep := range edge.Node.Dependencies.Nodes {
 			var rep Repository
 			// If we have the URL, let's use that.
-			if dep.Repository.url != "" {
-				rep = NewRepository(dep.Repository.url)
+			if dep.Repository.URL != "" {
+				rep = NewRepository(dep.Repository.URL)
 			} else {
 				rep = NewRepository(dep.PackageName)
 			}
 
-			rep.Language = dep.Repository.language.name
+			rep.Language = dep.Repository.Language.Name
 			// TODO: Solve the version normalization problem before adding versions to the database
 			// rep.Version = dep.Requirements
 
@@ -187,29 +188,51 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Repos
 }
 
 func (g *GithubDependencyScraper) GetDependents(ctx context.Context, ref Repository) ([]Repository, error) {
-	if err := limitDependentPage.Wait(ctx); err != nil {
-		return nil, err
-	}
-
-	panic("unimplemented!")
 
 	// Initial url to hit
-	var initial_page string = ref.URL
+	var initialPage string = fmt.Sprintf("https://github.com/%s/network/dependents", ref)
 
-	g.scrapeDependentPage(ctx, initial_page)
-
-	return nil, nil
-}
-
-func (g *GithubDependencyScraper) scrapeDependentPage(ctx context.Context, url string) ([]Repository, string, error) {
-	panic("unimplemented")
+	var dependents []Repository
 
 	c := colly.NewCollector(
 		colly.AllowedDomains("github.com"),
+		colly.MaxDepth(1),
 	)
+
+	err := c.Limit(&colly.LimitRule{
+		DomainGlob: "*",
+		Delay:      limitFetchDependents,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	c.OnRequest(func(r *colly.Request) {
-		log.Printf("Hitting %s", url)
+		log.Printf("Hitting %s", r.URL)
 	})
 
-	return nil, "", nil
+	//For each dependent we find
+	c.OnHTML("a[data-hovercard-type=repository]", func(e *colly.HTMLElement) {
+		// The href is likey to be something like "Offset64/dependagraph"
+		// so we create a repository from the full URL e.g "https://github.com/Offset64/dependagraph"
+		var dependent = NewRepository(
+			e.Request.AbsoluteURL(e.Attr("href")),
+		)
+		dependents = append(dependents, dependent)
+	})
+
+	//Follow the "Next" page button
+	c.OnHTML(".paginate-container .BtnGroup :last-child", func(e *colly.HTMLElement) {
+		//c.Visit()
+		c.Visit(e.Attr("href"))
+
+	})
+
+	c.OnError(func(r *colly.Response, err error) {
+		log.Fatalf("Encountered error while scraping dependents: %s", err)
+	})
+
+	c.Visit(initialPage)
+
+	return dependents, nil
 }

@@ -53,11 +53,6 @@ func main() {
 	}
 
 	ctx := context.Background()
-	ref := dependagraph.NewRepository(repository)
-	if !ref.InGithub {
-		log.Fatalf("invalid github repository reference: %s", ref)
-	}
-
 	scraper := dependagraph.NewGithubDependencyScraper(opts.GithubAPISecret)
 	drv, err := neo4j.NewDriver(opts.URI, neo4j.BasicAuth(opts.User, opts.Password, ""))
 	if err != nil {
@@ -72,28 +67,36 @@ func main() {
 		Error error
 	}
 
-	tasks := make(chan taskResult, 1)
-	tasks <- taskResult{
-		Ref:   ref,
-		Error: fetchGithubRepository(ctx, ref, scraper, db),
-	}
+	tasks := make(chan taskResult, 100) //arbitrary limit
 
 	if coalesce {
-		log.Printf("RUNNING IN COALESCE MODE. MAY RUN FOREVER.")
+		log.Printf("RUNNING IN COALESCE MODE AND WILL RUN FOREVER")
+		//TODO: Fix this up so we can run fetchGithubRepository on multiple things simultaneously while respecting rate limits
 		go func() {
-			// This is not optimally written because GetUntargetedNode will only ever return one result, and repeated calls may return the same result.
-			// A 'real' example would modify the below loop to pull many untargeted nodes in parallel, as it is unlikely we will come close to our rate limit like this.
 			for {
-				ref, ok := db.GetUntargetedNode(ctx)
+				untargetedNodes, ok := db.GetUntargetedNodes(ctx)
 				if !ok {
 					break
 				}
-
-				tasks <- taskResult{Ref: ref, Error: fetchGithubRepository(ctx, ref, scraper, db)}
+				for _, n := range untargetedNodes {
+					tasks <- taskResult{Ref: n, Error: fetchGithubRepository(ctx, n, scraper, db)}
+				}
 			}
 
 			close(tasks)
 		}()
+	} else { // we're only targeting a single repo
+		ref := dependagraph.NewRepository(repository)
+		if !ref.InGithub {
+			log.Fatalf("invalid github repository reference: %s", ref)
+		}
+
+		tasks <- taskResult{
+			Ref:   ref,
+			Error: fetchGithubRepository(ctx, ref, scraper, db),
+		}
+
+		close(tasks)
 	}
 
 	for task := range tasks {
@@ -112,21 +115,19 @@ func fetchGithubRepository(ctx context.Context, ref dependagraph.Repository, scr
 		dependencies error
 		dependents   error
 	}
-
 	wg.Add(2)
-	// This mess is so we can process both at the same time.
-	// This is simpler than using channels.
+	//This mess is so we can process both at the same time.
+	//This is simpler than using channels.
 	go func() {
 		dependents, errs.dependents = scraper.GetDependents(ctx, ref)
 		wg.Done()
 	}()
-
 	go func() {
 		dependencies, errs.dependencies = scraper.GetDependencies(ctx, ref)
 		wg.Done()
 	}()
-
 	wg.Wait()
+
 	if errs.dependencies != nil {
 		return fmt.Errorf("failed to fetch dependencies: %w", errs.dependencies)
 	}
