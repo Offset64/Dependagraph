@@ -81,6 +81,7 @@ func main() {
 				for _, n := range untargetedNodes {
 					tasks <- taskResult{Ref: n, Error: fetchGithubRepository(ctx, n, scraper, db)}
 				}
+				log.Println("Finished batch of untargeted nodes. Grabbing new batch")
 			}
 
 			close(tasks)
@@ -115,13 +116,14 @@ func fetchGithubRepository(ctx context.Context, ref dependagraph.Repository, scr
 		dependencies error
 		dependents   error
 	}
-	wg.Add(2)
+	wg.Add(1)
 	//This mess is so we can process both at the same time.
 	//This is simpler than using channels.
-	go func() {
-		dependents, errs.dependents = scraper.GetDependents(ctx, ref)
-		wg.Done()
-	}()
+	//TODO: Fix this, it doesn't fetch both simultaneously
+	//go func() {
+	//	dependents, errs.dependents = scraper.GetDependents(ctx, ref)
+	//	wg.Done()
+	//}()
 	go func() {
 		dependencies, errs.dependencies = scraper.GetDependencies(ctx, ref)
 		wg.Done()

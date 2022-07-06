@@ -143,9 +143,9 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Repos
 							Nodes []struct {
 								PackageName, Requirements string
 								Repository                struct {
-									Name     string
-									URL      string
-									Language struct {
+									Name            string
+									URL             string
+									PrimaryLanguage struct {
 										Name string
 									}
 								}
@@ -176,9 +176,9 @@ func (g *GithubDependencyScraper) GetDependencies(ctx context.Context, ref Repos
 				rep = NewRepository(dep.PackageName)
 			}
 
-			rep.Language = dep.Repository.Language.Name
+			rep.Language = dep.Repository.PrimaryLanguage.Name
 			// TODO: Solve the version normalization problem before adding versions to the database
-			// rep.Version = dep.Requirements
+			//rep.Version = dep.Requirements
 
 			deps = append(deps, rep)
 		}
